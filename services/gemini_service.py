@@ -4,7 +4,9 @@ from typing import Dict, Optional
 import google.generativeai as genai
 from langchain.memory import ConversationBufferMemory
 from langchain.schema import AIMessage, HumanMessage
+from database.session import get_session, add_session, init_sessions
 from config.config import APIKEY_GEMINI, GEMINI_MODEL
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,9 @@ def initialize_gemini():
         if not APIKEY_GEMINI:
             logger.error("Gemini API key not configured")
             return False
+        
+        # Initialize sessions
+        init_sessions()
             
         genai.configure(api_key=APIKEY_GEMINI)
         logger.info(f"Successfully initialized Gemini API with model: {GEMINI_MODEL}")
@@ -29,6 +34,32 @@ def initialize_gemini():
     except Exception as e:
         logger.error(f"Failed to initialize Gemini API: {e}")
         return False
+    
+def serialize_chat_history(chat):
+    """Convert chat history to a JSON-serializable format."""
+    serialized_history = []
+    
+   
+    for  msg in chat.history:
+        try:
+            # Simply extract the role and text content
+            if hasattr(msg, 'role'):
+                role = msg.role
+            else:
+                role = 'user' if 'user' in str(msg) else 'model'
+                
+            # For parts, just get the text representation
+            parts = str(msg.parts[0]) if hasattr(msg, 'parts') and msg.parts else ""
+                
+            serialized_history.append({
+                'role': role,
+                'parts': [parts]
+            })
+        except Exception as e:
+            logger.error(f"Error serializing message: {e}")
+            # Continue with partial data rather than failing completely
+
+    return serialized_history
 
 def get_user_memory(user_id: int) -> ConversationBufferMemory:
     """Get or create a memory buffer for a specific user."""
@@ -46,14 +77,30 @@ def get_user_chat(user_id: int):
                 system_instruction=_get_system_instruction()
             )
             
-            # Initialize user-specific chat session
-            user_chats[user_id] = model.start_chat(
-                history=[
-                    {"role": "user", "parts": "Hello"},
-                    {"role": "model", "parts": "Hello there! I'm VANEKO, but you can call me VANE! How can I help you today? ✨"},
-                ]
-            )
-            logger.info(f"Created new chat session for user {user_id}")
+            # # Check if user has a saved session
+            # saved_session = get_session(user_id)
+            # if saved_session and 'history' in saved_session:
+            #     # Load history from saved session
+            #     user_chats[user_id] = model.start_chat(history=saved_session['history'])
+            #     logger.info(f"Loaded existing chat session for user {user_id}")
+
+            saved_session = get_session(user_id)
+            if saved_session and 'history' in saved_session:
+                # Load history from saved session
+                saved_history = saved_session['history']
+                # Initialize user-specific chat session with saved history
+                user_chats[user_id] = model.start_chat(history=saved_history)
+                logger.info(f"Loaded existing chat session for user {user_id}")
+
+            else:
+                # Initialize user-specific chat session
+                user_chats[user_id] = model.start_chat(
+                    history=[
+                        {"role": "user", "parts": "Hello"},
+                        {"role": "model", "parts": "Hello there! I'm VANEKO, but you can call me VANE! How can I help you today? ✨"},
+                    ]
+                )
+                logger.info(f"Created new chat session for user {user_id}")
         except Exception as e:
             logger.error(f"Failed to create chat session for user {user_id}: {e}")
             return None
@@ -129,6 +176,13 @@ async def get_gemini_response(user_id: int, user_message: str) -> str:
         # Store the AI response in memory
         memory.chat_memory.add_message(AIMessage(content=response_text))
         
+        # Save the updated conversation history 
+        serialized_history = serialize_chat_history(chat)
+        add_session(user_id, {
+            'history': serialized_history,
+            'last_interaction': str(datetime.now())
+        })
+                
         return response_text
     
     except Exception as e:

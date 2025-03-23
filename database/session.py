@@ -57,3 +57,10 @@ def remove_session(user_id):
         del user_sessions[str(user_id)]
         return save_sessions()
     return False
+
+def is_registered_user(user_id):
+    sessions = load_sessions()
+    return str(user_id) in sessions
+
+def register_user(user_id):
+    add_session(user_id, get_session(user_id) or {})
